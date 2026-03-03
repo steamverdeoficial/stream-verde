@@ -1,0 +1,43 @@
+{
+  "name": "local-streaming-launcher",
+  "version": "1.0.1",
+  "main": "main-nw.js",
+  "scripts": {
+    "start": "nw .",
+    "dist": "node compilador.js"
+  },
+  "window": {
+    "title": "Stream Verde",
+    "show": false,
+    "transparent": true,
+    "frame": false,
+    "width": 500,
+    "height": 300,
+    "icon": "src/icon.png"
+  },
+  "webview": {
+    "partitions": [
+      {
+        "name": "trusted",
+        "accessible_resources": [
+          "<all_urls>"
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "webview"
+  ],
+  "chromium-args": "--enable-transparent-visuals --disable-gpu-vsync --autoplay-policy=no-user-gesture-required --enable-features=DnsOverHttps<DoHTrial --force-fieldtrials=DoHTrial/Group1 --force-fieldtrial-params=DoHTrial.Group1:Fallback/true/Templates/https%3A%2F%2Fcloudflare-dns.com%2Fdns-query",
+  "nodejs": true,
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "discord-rpc": "^4.0.1",
+    "nw": "0.107.0"
+  },
+  "devDependencies": {
+    "fs-extra": "^11.3.3",
+    "nw-builder": "^3.0.0",
+    "rcedit": "^5.0.2"
+  }
+}
