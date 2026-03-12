@@ -1,6 +1,6 @@
 {
   "name": "local-streaming-launcher",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "main-nw.js",
   "scripts": {
     "start": "nw .",
@@ -28,7 +28,7 @@
   "permissions": [
     "webview"
   ],
-  "chromium-args": "--enable-transparent-visuals --disable-gpu-vsync --autoplay-policy=no-user-gesture-required --enable-features=DnsOverHttps<DoHTrial --force-fieldtrials=DoHTrial/Group1 --force-fieldtrial-params=DoHTrial.Group1:Fallback/true/Templates/https%3A%2F%2Fcloudflare-dns.com%2Fdns-query",
+  "chromium-args": "--enable-transparent-visuals --disable-gpu-vsync --autoplay-policy=no-user-gesture-required --enable-features=AsyncDns,DnsOverHttps<DoHTrial --force-fieldtrials=DoHTrial/Group1 --force-fieldtrial-params=DoHTrial.Group1:Fallback/false/Templates/https%3A%2F%2F1.1.1.1%2Fdns-query%20https%3A%2F%2F8.8.8.8%2Fdns-query%20https%3A%2F%2F8.8.4.4%2Fdns-query",
   "nodejs": true,
   "dependencies": {
     "adm-zip": "^0.5.16",
