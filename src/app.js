@@ -375,7 +375,10 @@ if (nw && nw.App && nw.App.manifest) {
     document.getElementById('settings-version-text').innerText = `v${currentVersion}`; 
 
     const lastVersionSeen = localStorage.getItem('sv_last_version_seen');
-    if (lastVersionSeen !== currentVersion && lastVersionSeen !== null) {
+    const isExistingUser = localStorage.getItem('sv_user_id') !== null;
+    
+    // Mostra se a versão mudou OU se não tem a chave mas já é um usuário antigo (update da 1.0.4 pra 1.0.5)
+    if (lastVersionSeen !== currentVersion && (lastVersionSeen !== null || isExistingUser)) {
         document.getElementById('changelog-modal').style.display = 'flex';
         fetch(releasesApiUrl, { cache: 'no-store' })
             .then(res => res.json())
