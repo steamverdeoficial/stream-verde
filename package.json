@@ -1,6 +1,6 @@
 {
   "name": "local-streaming-launcher",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "main": "main-nw.js",
   "scripts": {
     "start": "nw .",
