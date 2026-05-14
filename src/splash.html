@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Stream Verde - Filmes, Séries e Animes !</title>
+  <style>
+    /* A base precisa ser transparente para o SO recortar os cantos arredondados */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: transparent;
+
+      /* 1ª MÁSCARA: Força a própria janela invisível do HTML a ser redonda */
+      border-radius: 16px;
+      overflow: hidden;
+
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+
+    /* O Vidro agora ocupa 100% da telinha da Splash */
+    .glass-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100vw;
+      height: 100vh;
+
+      /* O SEGREDO DO VIDRO SUAVE: rgba escuro em 75% + blur */
+      background: rgba(22, 22, 22, 0.75);
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
+
+      /* Borda arredondada na janela toda com a sua cor verde #81bc00 sutil */
+      border-radius: 16px;
+      border: 1px solid rgba(129, 188, 0, 0.3);
+
+      /* 2ª MÁSCARA: Garante que o efeito de vidro (blur) não vaze pelas bordas redondas */
+      overflow: hidden;
+
+      box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 10px 30px rgba(0, 0, 0, 0.8);
+      padding: 30px 40px;
+      box-sizing: border-box;
+      animation: windowFadeIn 0.4s ease-out;
+    }
+
+    .glass-panel img {
+      max-width: 180px;
+      max-height: 100px;
+      object-fit: contain;
+      margin-bottom: 25px;
+      -webkit-user-drag: none;
+      filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+    }
+
+    .status-container {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.85);
+      font-weight: 500;
+    }
+
+    #loading-percentage {
+      color: #81bc00;
+      font-weight: bold;
+      text-shadow: 0 0 8px rgba(129, 188, 0, 0.3);
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #5c8500, #81bc00);
+      box-shadow: 0 0 10px rgba(129, 188, 0, 0.5);
+      border-radius: 10px;
+      transition: width 0.3s ease;
+    }
+
+    @keyframes windowFadeIn {
+      from {
+        opacity: 0;
+        transform: scale(0.97);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="glass-panel">
+    <img src="logo.png" alt="Logo do App">
+
+    <div class="status-container">
+      <span id="loading-text">Iniciando sistema...</span>
+      <span id="loading-percentage">0%</span>
+    </div>
+
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    const loadingText = document.getElementById('loading-text');
+    const loadingPercentage = document.getElementById('loading-percentage');
+    const progressFill = document.getElementById('progress-fill');
+
+    function setProgress(pct, text) {
+      if (text) loadingText.innerText = text;
+      loadingPercentage.innerText = `${pct}%`;
+      progressFill.style.width = `${pct}%`;
+    }
+
+    // URLs do sistema OTA
+    const repoUrl = 'https://raw.githubusercontent.com/steamverdeoficial/stream-verde/main/package.json';
+    const releasesApiUrl = 'https://api.github.com/repos/steamverdeoficial/stream-verde/releases/latest';
+    let currentVersion = '0.0.0';
+    if (typeof nw !== 'undefined' && nw.App && nw.App.manifest) currentVersion = nw.App.manifest.version;
+
+    async function splashSequence() {
+      try {
+        // Passo 1: Iniciando
+        setProgress(5, 'Iniciando sistema...');
+        await sleep(400);
+
+        // Passo 2: Verificar Atualizações
+        setProgress(15, '🔍 Verificando atualizações...');
+        let needsUpdate = false;
+        let remoteVersion = currentVersion;
+
+        try {
+          const res = await fetch(repoUrl, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.version && data.version !== currentVersion && data.version > currentVersion) {
+              needsUpdate = true;
+              remoteVersion = data.version;
+            }
+          }
+        } catch (e) { /* sem internet, segue normalmente */ }
+
+        if (needsUpdate) {
+          // === MODO UPDATE AUTOMÁTICO ===
+          window.splashUpdating = true; // Bloqueia o main-nw.js de abrir o app
+          setProgress(20, `⬇️ Nova versão ${remoteVersion} encontrada!`);
+          await sleep(800);
+
+          // Buscar o .exe direto (ignorando a API do GitHub para fugir do Rate Limit 403)
+          setProgress(25, '⬇️ Conectando ao servidor...');
+          const downloadUrl = `https://github.com/steamverdeoficial/stream-verde/releases/download/v${remoteVersion}/StreamVerde-Setup-v${remoteVersion}.exe`;
+          const fileName = `StreamVerde-Setup-v${remoteVersion}.exe`;
+          const tempDir = require('os').tmpdir();
+          const filePath = require('path').join(tempDir, fileName);
+
+          // Download com progresso (25% → 90%)
+          setProgress(28, '⬇️ Baixando atualização...');
+          const dlRes = await fetch(downloadUrl);
+          if (!dlRes.ok) throw new Error('Download falhou');
+          const totalBytes = parseInt(dlRes.headers.get('content-length')) || 0;
+          const reader = dlRes.body.getReader();
+          let receivedBytes = 0;
+          let chunks = [];
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            receivedBytes += value.length;
+            if (totalBytes > 0) {
+              const dlPct = Math.round((receivedBytes / totalBytes) * 100);
+              const barPct = 28 + Math.round(dlPct * 0.62); // Mapeia 0-100% do download para 28-90% da barra
+              const mb = (receivedBytes / 1048576).toFixed(1);
+              const totalMb = (totalBytes / 1048576).toFixed(1);
+              setProgress(barPct, `⬇️ Baixando... ${mb}MB / ${totalMb}MB`);
+            }
+          }
+
+          // Salvar no disco
+          setProgress(92, '💾 Salvando instalador...');
+          const buffer = Buffer.concat(chunks.map(c => Buffer.from(c)));
+          const fs = require('fs');
+          try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { }
+          let finalPath = filePath;
+          try { fs.writeFileSync(finalPath, buffer); } catch (e) {
+            const uniqueName = fileName.replace('.exe', '_' + Date.now() + '.exe');
+            finalPath = require('path').join(tempDir, uniqueName);
+            fs.writeFileSync(finalPath, buffer);
+          }
+
+          // Abrir instalador e fechar
+          setProgress(98, '🚀 Abrindo instalador...');
+          await sleep(500);
+          const { spawn } = require('child_process');
+          const proc = spawn(finalPath, [], { detached: true, stdio: 'ignore' });
+          proc.unref();
+
+          setProgress(100, '✅ Atualizando! Aguarde...');
+          await sleep(1500);
+          nw.App.quit();
+          return; // Não continua pro app
+
+        } else {
+          // === SEM UPDATE — SEQUÊNCIA NORMAL ===
+          setProgress(25, 'Versão atualizada ✓');
+          await sleep(400);
+          setProgress(40, 'Fazendo as paradas...');
+          await sleep(500);
+          setProgress(55, 'Preparando o projetor...');
+          await sleep(500);
+          setProgress(70, 'Fazendo a Pipoca...');
+          await sleep(500);
+          setProgress(85, 'Já senta no sofá que lá vai...');
+          await sleep(500);
+          setProgress(100, 'Pronto!');
+          await sleep(300);
+          window.splashDone = true; // Avisa o main-nw.js que pode abrir o app
+        }
+
+      } catch (updateErr) {
+        // Se o update falhou por qualquer motivo, segue pro app normalmente
+        console.log('Update check error:', updateErr.message);
+        setProgress(30, 'Fazendo as paradas...');
+        await sleep(400);
+        setProgress(55, 'Preparando o projetor...');
+        await sleep(500);
+        setProgress(75, 'Fazendo a Pipoca...');
+        await sleep(500);
+        setProgress(90, 'Já senta no sofá que lá vai...');
+        await sleep(400);
+        setProgress(100, 'Pronto!');
+        await sleep(300);
+        window.splashDone = true; // Avisa o main-nw.js mesmo após erro
+      }
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // Inicia a sequência
+    splashSequence();
+  </script>
+</body>
+
+</html>
