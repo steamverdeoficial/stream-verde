@@ -106,6 +106,7 @@ function checarSessaoLocal() {
         clearInterval(lockWindowInterval); loginOverlay.style.display = 'none'; titleBar.style.display = 'flex';
         setTimeout(() => { appWindow.maximize(); }, 150); webview.src = SITE_DOMAIN;
         iniciarVerificacaoAssinatura();
+        iniciarHeartbeat();
     } else {
         titleBar.style.display = 'none'; loginOverlay.style.display = 'flex'; webview.src = 'about:blank';
         appWindow.leaveFullscreen(); appWindow.unmaximize(); appWindow.resizeTo(450, 680); appWindow.setPosition('center');
@@ -121,6 +122,7 @@ function forcarLogout(msgErro) {
     localStorage.removeItem('sv_logged_in'); sessionStorage.removeItem('sv_logged_in');
     localStorage.removeItem('sv_user_id');
     if (checkSubInterval) { clearInterval(checkSubInterval); checkSubInterval = null; }
+    pararHeartbeat();
     // Navegar para o endpoint de logout server-side (limpa cookies httpOnly)
     webview.src = SITE_DOMAIN + '/?sv_auto_logout=1';
     // Limpar cookies da partição trusted
@@ -178,6 +180,7 @@ if (btnLogin) {
                     btnLogin.innerText = "Entrar no Launcher"; btnLogin.disabled = false;
                     if (rememberMe) localStorage.setItem('sv_logged_in', 'true'); else sessionStorage.setItem('sv_logged_in', 'true');
                     localStorage.setItem('sv_user_id', data.user_id);
+                    localStorage.setItem('sv_username', user);
                     loginError.style.display = 'none'; loginOverlay.style.display = 'none';
                     clearInterval(lockWindowInterval); titleBar.style.display = 'flex'; appWindow.maximize();
                     isLoggingIn = true; webview.src = SITE_DOMAIN + '/wp-login.php';
@@ -343,20 +346,70 @@ function iniciarVerificacaoAssinatura() {
 }
 
 // ==========================================
+// --- 3.6 ANALYTICS HEARTBEAT ---
+// ==========================================
+var heartbeatInterval = null;
+var HEARTBEAT_API = SITE_DOMAIN + '/wp-json/sv/v1/heartbeat';
+
+function enviarHeartbeat() {
+    const userId = localStorage.getItem('sv_user_id');
+    if (!userId) { log('Heartbeat: sem user_id, abortando.'); return; }
+    
+    const username = loginUser ? loginUser.value.trim() : '';
+    const appVersion = (typeof currentVersion !== 'undefined') ? currentVersion : '0.0.0';
+    const finalUsername = username || localStorage.getItem('sv_username') || 'user_' + userId;
+    
+    log('Heartbeat: enviando... user_id=' + userId + ' username=' + finalUsername + ' version=' + appVersion);
+    
+    fetch(HEARTBEAT_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            user_id: parseInt(userId),
+            username: finalUsername,
+            platform: 'launcher',
+            app_version: appVersion,
+            current_page: (typeof windowTitle !== 'undefined' && windowTitle) ? windowTitle.innerText || '' : ''
+        })
+    })
+    .then(res => res.json())
+    .then(data => log('Heartbeat: resposta OK - ' + JSON.stringify(data)))
+    .catch(err => log('Heartbeat: ERRO - ' + err.message));
+}
+
+function iniciarHeartbeat() {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    setTimeout(() => enviarHeartbeat(), 5000); // Primeiro ping 5s após login
+    heartbeatInterval = setInterval(() => enviarHeartbeat(), 15000); // Depois a cada 15s
+}
+
+function pararHeartbeat() {
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+}
+
+// ==========================================
 // --- 4 E 5. CONFIGURAÇÕES E UPDATER ---
 // ==========================================
 let rpcEnabled = localStorage.getItem('sv_discord') !== 'false'; let autoNextEnabled = localStorage.getItem('sv_autonext') !== 'false';
 let autoSkipEnabled = localStorage.getItem('sv_autoskip') === 'true'; // Pular abertura automático
 let freioEnabled = localStorage.getItem('sv_freio') !== 'false'; let freioLimit = parseInt(localStorage.getItem('sv_freio_limit')) || 10; let episociosSeguidos = 0;
-document.getElementById('toggle-discord').checked = rpcEnabled; document.getElementById('toggle-autonext').checked = autoNextEnabled;
-document.getElementById('toggle-autoskip').checked = autoSkipEnabled;
+let elDiscord = document.getElementById('toggle-discord');
+if (elDiscord) elDiscord.checked = rpcEnabled;
+let elAutoNext = document.getElementById('toggle-autonext');
+if (elAutoNext) elAutoNext.checked = autoNextEnabled;
+let elAutoSkip = document.getElementById('toggle-autoskip');
+if (elAutoSkip) elAutoSkip.checked = autoSkipEnabled;
+
 const toggleFreioBtn = document.getElementById('toggle-freio'); const inputFreioLimit = document.getElementById('input-freio-limite');
 if (toggleFreioBtn) toggleFreioBtn.checked = freioEnabled; if (inputFreioLimit) inputFreioLimit.value = freioLimit;
-document.getElementById('btn-settings').addEventListener('click', () => document.getElementById('settings-modal').style.display = 'flex');
-document.getElementById('close-settings').addEventListener('click', () => document.getElementById('settings-modal').style.display = 'none');
-document.getElementById('toggle-discord').addEventListener('change', (e) => { rpcEnabled = e.target.checked; localStorage.setItem('sv_discord', rpcEnabled); if (!rpcEnabled && typeof rpc !== 'undefined' && rpcReady) rpc.clearActivity(); if (rpcEnabled && rpcReady) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir'); });
-document.getElementById('toggle-autonext').addEventListener('change', (e) => { autoNextEnabled = e.target.checked; localStorage.setItem('sv_autonext', autoNextEnabled); });
-document.getElementById('toggle-autoskip').addEventListener('change', (e) => { autoSkipEnabled = e.target.checked; localStorage.setItem('sv_autoskip', autoSkipEnabled); });
+let elSettings = document.getElementById('btn-settings');
+if (elSettings) elSettings.addEventListener('click', () => { let sm = document.getElementById('settings-modal'); if(sm) sm.style.display = 'flex'; });
+let elCloseSet = document.getElementById('close-settings');
+if (elCloseSet) elCloseSet.addEventListener('click', () => { let sm = document.getElementById('settings-modal'); if(sm) sm.style.display = 'none'; });
+
+if (elDiscord) elDiscord.addEventListener('change', (e) => { rpcEnabled = e.target.checked; localStorage.setItem('sv_discord', rpcEnabled); if (!rpcEnabled && typeof rpc !== 'undefined' && rpcReady) rpc.clearActivity(); if (rpcEnabled && rpcReady) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir'); });
+if (elAutoNext) elAutoNext.addEventListener('change', (e) => { autoNextEnabled = e.target.checked; localStorage.setItem('sv_autonext', autoNextEnabled); });
+if (elAutoSkip) elAutoSkip.addEventListener('change', (e) => { autoSkipEnabled = e.target.checked; localStorage.setItem('sv_autoskip', autoSkipEnabled); });
 if (toggleFreioBtn) toggleFreioBtn.addEventListener('change', (e) => { freioEnabled = e.target.checked; localStorage.setItem('sv_freio', freioEnabled); });
 if (inputFreioLimit) inputFreioLimit.addEventListener('change', (e) => { let val = parseInt(e.target.value); if (val < 1) val = 1; freioLimit = val; localStorage.setItem('sv_freio_limit', freioLimit); });
 
@@ -369,47 +422,133 @@ let currentVersion = '0.0.0';
 let isDownloading = false;
 let latestInstallerUrl = null;
 let latestVersionAvailable = null;
-if (nw && nw.App && nw.App.manifest) { 
+if (nw && nw.App && nw.App.manifest && nw.App.manifest.version) { 
     currentVersion = nw.App.manifest.version; 
-    document.getElementById('app-version').innerText = `v${currentVersion}`; 
-    document.getElementById('settings-version-text').innerText = `v${currentVersion}`; 
+    log('Versão lida de nw.App.manifest: ' + currentVersion);
+} else {
+    // Fallback: ler direto do package.json
+    try {
+        const pkg = require('./package.json');
+        currentVersion = pkg.version || '0.0.0';
+        log('Versão lida de package.json (fallback): ' + currentVersion);
+    } catch(e) {
+        log('ERRO ao ler versão: ' + e.message);
+    }
+}
+let elAppVer = document.getElementById('app-version');
+if (elAppVer) elAppVer.innerText = `v${currentVersion}`; 
+let elSetVer = document.getElementById('settings-version-text');
+if (elSetVer) elSetVer.innerText = `v${currentVersion}`; 
+
+    // Função reutilizável para converter markdown do GitHub em HTML
+    function parseChangelogMarkdown(body) {
+        let text = body.replace(/\r\n/g, '\n');
+        
+        // Processar tabelas markdown ANTES de qualquer outra coisa
+        const lines = text.split('\n');
+        let result = [];
+        let i = 0;
+        while (i < lines.length) {
+            // Detectar início de tabela: linha com | e próxima linha é separador (|---|)
+            if (lines[i].trim().startsWith('|') && i + 1 < lines.length && /^\|[\s:-]+\|/.test(lines[i + 1].trim())) {
+                let tableHTML = '<table style="width:100%; border-collapse:collapse; margin:12px 0; font-size:13px;">';
+                // Header
+                const headers = lines[i].split('|').filter(c => c.trim() !== '');
+                tableHTML += '<tr>';
+                headers.forEach(h => {
+                    tableHTML += '<th style="border:1px solid #444; padding:10px 12px; background:#252525; color:#81bc00; text-align:left; font-weight:600;">' + h.trim() + '</th>';
+                });
+                tableHTML += '</tr>';
+                i += 2; // Pular header + separador
+                // Rows
+                const totalCols = headers.length;
+                while (i < lines.length && lines[i].trim().startsWith('|')) {
+                    // Pegar todas as colunas incluindo vazias
+                    const rawCols = lines[i].split('|');
+                    rawCols.shift(); // remove o primeiro vazio antes do primeiro |
+                    if (rawCols.length > 0 && rawCols[rawCols.length - 1].trim() === '') rawCols.pop(); // remove último vazio
+                    
+                    const col1 = rawCols[0] ? rawCols[0].trim() : '';
+                    const col2 = rawCols[1] ? rawCols[1].trim() : '';
+                    
+                    tableHTML += '<tr>';
+                    if (totalCols === 2 && col1 && !col2) {
+                        // Primeira coluna tem conteúdo, segunda vazia → colspan
+                        let cell = col1.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#fff;">$1</strong>');
+                        tableHTML += '<td colspan="2" style="border:1px solid #333; padding:10px 14px; color:#ccc;">' + cell + '</td>';
+                    } else if (totalCols === 2 && !col1 && col2) {
+                        // Primeira vazia, segunda com conteúdo → colspan
+                        let cell = col2.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#fff;">$1</strong>');
+                        tableHTML += '<td colspan="2" style="border:1px solid #333; padding:10px 14px; color:#ccc; padding-left:20px;">' + cell + '</td>';
+                    } else {
+                        // Ambas com conteúdo → normal
+                        rawCols.forEach(c => {
+                            let cell = (c || '').trim();
+                            cell = cell.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#fff;">$1</strong>');
+                            tableHTML += '<td style="border:1px solid #333; padding:10px 14px; color:#ccc; vertical-align:top;">' + cell + '</td>';
+                        });
+                    }
+                    tableHTML += '</tr>';
+                    i++;
+                }
+                tableHTML += '</table>';
+                result.push(tableHTML);
+            } else {
+                result.push(lines[i]);
+                i++;
+            }
+        }
+        text = result.join('\n');
+        
+        // Processar o resto do markdown
+        text = text.replace(/^### (.*$)/gim, '<h3 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:15px;">$1</h3>');
+        text = text.replace(/^## (.*$)/gim, '<h2 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:17px;">$1</h2>');
+        text = text.replace(/^# (.*$)/gim, '<h1 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:19px;">$1</h1>');
+        text = text.replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#fff;">$1</strong>');
+        text = text.replace(/^\* (.*$)/gim, '<div style="margin-left:15px; margin-bottom:5px;">• $1</div>');
+        text = text.replace(/^- (.*$)/gim, '<div style="margin-left:15px; margin-bottom:5px;">• $1</div>');
+        text = text.replace(/\n/gim, '<br>');
+        return text;
+    }
+
+    function fetchAndShowChangelog() {
+        document.getElementById('changelog-content').innerHTML = 'Carregando novidades...';
+        document.getElementById('changelog-modal').style.display = 'flex';
+        fetch(releasesApiUrl, { cache: 'no-store' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.body) {
+                    document.getElementById('changelog-content').innerHTML = parseChangelogMarkdown(data.body);
+                } else {
+                    document.getElementById('changelog-content').innerHTML = 'Nenhum changelog disponível para esta versão.';
+                }
+            })
+            .catch(err => { document.getElementById('changelog-content').innerHTML = 'Não foi possível carregar o changelog.'; });
+    }
+
+    const closeChangelog = () => {
+        document.getElementById('changelog-modal').style.display = 'none';
+        localStorage.setItem('sv_last_version_seen', currentVersion);
+    };
+    document.getElementById('close-changelog').addEventListener('click', closeChangelog);
+    document.getElementById('btn-changelog-ok').addEventListener('click', closeChangelog);
+
+    // Botão "Ver Changelog" nas configurações
+    document.getElementById('btn-view-changelog').addEventListener('click', () => {
+        document.getElementById('settings-modal').style.display = 'none';
+        fetchAndShowChangelog();
+    });
 
     const lastVersionSeen = localStorage.getItem('sv_last_version_seen');
     const isExistingUser = localStorage.getItem('sv_user_id') !== null;
     
     // Mostra se a versão mudou OU se não tem a chave mas já é um usuário antigo (update da 1.0.4 pra 1.0.5)
     if (lastVersionSeen !== currentVersion && (lastVersionSeen !== null || isExistingUser)) {
-        document.getElementById('changelog-modal').style.display = 'flex';
-        fetch(releasesApiUrl, { cache: 'no-store' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.body) {
-                    let text = data.body.replace(/\r\n/g, '\n');
-                    text = text.replace(/^### (.*$)/gim, '<h3 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:15px;">$1</h3>');
-                    text = text.replace(/^## (.*$)/gim, '<h2 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:17px;">$1</h2>');
-                    text = text.replace(/^# (.*$)/gim, '<h1 style="color:#81bc00; margin-top:15px; margin-bottom:5px; font-size:19px;">$1</h1>');
-                    text = text.replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#fff;">$1</strong>');
-                    text = text.replace(/^\* (.*$)/gim, '<div style="margin-left:15px; margin-bottom:5px;">• $1</div>');
-                    text = text.replace(/^- (.*$)/gim, '<div style="margin-left:15px; margin-bottom:5px;">• $1</div>');
-                    text = text.replace(/\n/gim, '<br>');
-                    document.getElementById('changelog-content').innerHTML = text;
-                } else {
-                    document.getElementById('changelog-content').innerHTML = 'Atualização concluída com sucesso!';
-                }
-            })
-            .catch(err => { document.getElementById('changelog-content').innerHTML = 'Atualização concluída com sucesso!'; });
-
-        const closeChangelog = () => {
-            document.getElementById('changelog-modal').style.display = 'none';
-            localStorage.setItem('sv_last_version_seen', currentVersion);
-        };
-        document.getElementById('close-changelog').addEventListener('click', closeChangelog);
-        document.getElementById('btn-changelog-ok').addEventListener('click', closeChangelog);
+        fetchAndShowChangelog();
     } else if (lastVersionSeen === null) {
         // Se for a primeiríssima vez abrindo o launcher na vida, não mostra changelog pra não assustar o usuário novo
         localStorage.setItem('sv_last_version_seen', currentVersion);
     }
-}
 
 async function checkForUpdates(manual = false) {
     if (isDownloading) return;
@@ -632,26 +771,45 @@ webview.addEventListener('loadcommit', () => {
                 }
             } catch(e) {}
 
-            window.addEventListener('keydown', (e) => {
-                const tag = document.activeElement ? document.activeElement.tagName : '';
-                if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            // --- SISTEMA DE TECLADO VIA POSTMESSAGE (Resolve foco preso no NW.js) ---
+            // RECEPTOR: Roda em todos os frames, escuta mensagens de teclado e controla o vídeo
+            window.addEventListener('message', (msg) => {
+                if (!msg.data || msg.data.type !== 'VERDE_KEY') return;
                 const video = document.querySelector('video');
-                const chaves = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'];
-                if (chaves.includes(e.code)) {
-                    e.preventDefault(); e.stopImmediatePropagation(); 
-                    if (video) {
-                        if (e.code === 'Space') video.paused ? video.play() : video.pause();
-                        if (e.code === 'ArrowRight') video.currentTime += 10;
-                        if (e.code === 'ArrowLeft') video.currentTime -= 10;
-                        if (e.code === 'ArrowUp') video.volume = Math.min(video.volume + 0.1, 1);
-                        if (e.code === 'ArrowDown') video.volume = Math.max(video.volume - 0.1, 0);
-                    }
-                    if (e.code === 'Escape') {
-                        if (document.exitFullscreen) document.exitFullscreen();
-                        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                    }
+                if (video) {
+                    if (msg.data.code === 'Space') video.paused ? video.play() : video.pause();
+                    if (msg.data.code === 'ArrowRight') video.currentTime += 10;
+                    if (msg.data.code === 'ArrowLeft') video.currentTime -= 10;
+                    if (msg.data.code === 'ArrowUp') video.volume = Math.min(video.volume + 0.1, 1);
+                    if (msg.data.code === 'ArrowDown') video.volume = Math.max(video.volume - 0.1, 0);
                 }
-            }, true);
+                if (msg.data.code === 'Escape') {
+                    if (document.exitFullscreen) document.exitFullscreen();
+                    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                }
+                // Repassar para iframes filhos (cadeia de iframes aninhados)
+                document.querySelectorAll('iframe').forEach(f => {
+                    try { f.contentWindow.postMessage(msg.data, '*'); } catch(err) {}
+                });
+            });
+
+            // EMISSOR: Só roda na página principal, captura teclado e manda pros iframes
+            if (window.self === window.top) {
+                window.addEventListener('keydown', (e) => {
+                    const tag = document.activeElement ? document.activeElement.tagName : '';
+                    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+                    const chaves = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'];
+                    if (chaves.includes(e.code)) {
+                        const iframes = document.querySelectorAll('iframe');
+                        if (iframes.length > 0 || e.code === 'Escape') {
+                            e.preventDefault(); e.stopImmediatePropagation();
+                            iframes.forEach(f => {
+                                try { f.contentWindow.postMessage({ type: 'VERDE_KEY', code: e.code }, '*'); } catch(err) {}
+                            });
+                        }
+                    }
+                }, true);
+            }
 
             const notificarTela = () => {
                 if (document.fullscreenElement || document.webkitFullscreenElement) console.log('VERDE_FS_ON');
