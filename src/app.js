@@ -1,5 +1,4 @@
-window.chrome = { cookies: { getAll: function(a, cb){ if(cb) cb([]); }, remove: function(){} } }; window.nw = undefined; window.process = { execPath: 'launcher.exe' }; window.require = function() { return { join: function(){}, dirname: function(){}, tmpdir: function(){}, spawn: function(){}, appendFileSync: function(){}, writeFileSync: function(){}, get: function(){} }; };
-const require = window.require;
+window.chrome = { cookies: { getAll: function(a, cb){ if(cb) cb([]); }, remove: function(){} } }; window.nw = undefined;
 // ==========================================
 // --- 0. LOG VISÍVEL EM ARQUIVO ---
 // ==========================================
