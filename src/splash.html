@@ -138,7 +138,9 @@
     const repoUrl = 'https://raw.githubusercontent.com/steamverdeoficial/stream-verde/main/package.json';
     const releasesApiUrl = 'https://api.github.com/repos/steamverdeoficial/stream-verde/releases/latest';
     let currentVersion = '0.0.0';
-    if (typeof nw !== 'undefined' && nw.App && nw.App.manifest) currentVersion = nw.App.manifest.version;
+    try {
+        currentVersion = require('../package.json').version || '0.0.0';
+    } catch(e) {}
 
     async function splashSequence() {
       try {
@@ -219,40 +221,40 @@
 
           setProgress(100, '✅ Atualizando! Aguarde...');
           await sleep(1500);
-          nw.App.quit();
+          require('electron').ipcRenderer.send('close-app');
           return; // Não continua pro app
 
         } else {
           // === SEM UPDATE — SEQUÊNCIA NORMAL ===
           setProgress(25, 'Versão atualizada ✓');
-          await sleep(400);
+          await sleep(800);
           setProgress(40, 'Fazendo as paradas...');
-          await sleep(500);
+          await sleep(1000);
           setProgress(55, 'Preparando o projetor...');
-          await sleep(500);
+          await sleep(1000);
           setProgress(70, 'Fazendo a Pipoca...');
-          await sleep(500);
+          await sleep(1000);
           setProgress(85, 'Já senta no sofá que lá vai...');
-          await sleep(500);
+          await sleep(1000);
           setProgress(100, 'Pronto!');
-          await sleep(300);
-          window.splashDone = true; // Avisa o main-nw.js que pode abrir o app
+          await sleep(600);
+          require('electron').ipcRenderer.send('splash-ready');
         }
 
       } catch (updateErr) {
         // Se o update falhou por qualquer motivo, segue pro app normalmente
         console.log('Update check error:', updateErr.message);
         setProgress(30, 'Fazendo as paradas...');
-        await sleep(400);
+        await sleep(1000);
         setProgress(55, 'Preparando o projetor...');
-        await sleep(500);
+        await sleep(1000);
         setProgress(75, 'Fazendo a Pipoca...');
-        await sleep(500);
+        await sleep(1000);
         setProgress(90, 'Já senta no sofá que lá vai...');
-        await sleep(400);
+        await sleep(1000);
         setProgress(100, 'Pronto!');
-        await sleep(300);
-        window.splashDone = true; // Avisa o main-nw.js mesmo após erro
+        await sleep(600);
+        require('electron').ipcRenderer.send('splash-ready');
       }
     }
 

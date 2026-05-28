@@ -1,3 +1,5 @@
+window.chrome = { cookies: { getAll: function(a, cb){ if(cb) cb([]); }, remove: function(){} } }; window.nw = undefined; window.process = { execPath: 'launcher.exe' }; window.require = function() { return { join: function(){}, dirname: function(){}, tmpdir: function(){}, spawn: function(){}, appendFileSync: function(){}, writeFileSync: function(){}, get: function(){} }; };
+const require = window.require;
 // ==========================================
 // --- 0. LOG VISÍVEL EM ARQUIVO ---
 // ==========================================
@@ -14,7 +16,7 @@ log('Log path: ' + _logPath);
 // ==========================================
 // --- 1. CONTROLES DE JANELA (Carrega Primeiro!) ---
 // ==========================================
-const appWindow = nw.Window.get();
+const appWindow = { close: () => window.electronAPI.closeApp(), minimize: () => window.electronAPI.minimizeApp(), maximize: () => window.electronAPI.maximizeApp(), toggleMaximize: () => { if (window.electronAPI.toggleMaximizeApp) window.electronAPI.toggleMaximizeApp(); else window.electronAPI.maximizeApp(); }, unmaximize: () => { if (window.electronAPI.unmaximizeApp) window.electronAPI.unmaximizeApp(); else window.electronAPI.maximizeApp(); }, resizeTo: (w, h) => window.electronAPI.resizeApp(w, h), setPosition: (pos) => { if (pos === 'center') window.electronAPI.centerApp(); }, leaveFullscreen: () => { if (window.electronAPI.leaveFullscreenApp) window.electronAPI.leaveFullscreenApp(); }, on: () => {} };
 const titleBar = document.getElementById('title-bar');
 let isMaximized = true;
 let capaGlobal = 'logo';
@@ -23,7 +25,7 @@ appWindow.on('maximize', () => { isMaximized = true; });
 appWindow.on('restore', () => { isMaximized = false; });
 
 document.getElementById('btn-minimize').addEventListener('click', () => appWindow.minimize());
-document.getElementById('btn-maximize').addEventListener('click', () => { if (isMaximized) appWindow.unmaximize(); else appWindow.maximize(); });
+document.getElementById('btn-maximize').addEventListener('click', () => { appWindow.toggleMaximize(); });
 document.getElementById('btn-close').addEventListener('click', () => appWindow.close());
 document.getElementById('btn-login-minimize').addEventListener('click', () => appWindow.minimize());
 document.getElementById('btn-login-close').addEventListener('click', () => appWindow.close());
@@ -39,44 +41,86 @@ let shouldAutoFullscreen = false;
 let spinnerSafetyTimer = null;
 let hasCommitted = true;
 
-document.getElementById('btn-back').addEventListener('click', () => { loadingOverlay.style.display = 'flex'; webview.back(); });
-document.getElementById('btn-forward').addEventListener('click', () => { loadingOverlay.style.display = 'flex'; webview.forward(); });
-document.getElementById('btn-reload').addEventListener('click', () => { loadingOverlay.style.display = 'flex'; webview.reload(); });
+document.getElementById('btn-back').addEventListener('click', () => { webview.back(); });
+document.getElementById('btn-forward').addEventListener('click', () => { webview.forward(); });
+document.getElementById('btn-reload').addEventListener('click', () => { webview.reload(); });
 
-webview.addEventListener('loadstart', (e) => {
+let showSpinnerTimer = null;
+
+webview.addEventListener('did-start-loading', (e) => {
     if (e.isTopLevel === false) return;
     hasCommitted = false;
-    loadingOverlay.style.display = 'flex';
-    windowTitle.innerText = 'Carregando...';
-    document.title = `Carregando... - ${appName}`;
+    
     setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir');
+
+    // Mostrar spinner só se a página demorar mais de 500ms pra carregar
+    clearTimeout(showSpinnerTimer);
+    showSpinnerTimer = setTimeout(() => {
+        loadingOverlay.style.display = 'flex';
+    }, 500);
+
+    // Segurança: se ficar mais de 4s, esconde o spinner de qualquer jeito
     clearTimeout(spinnerSafetyTimer);
     spinnerSafetyTimer = setTimeout(() => {
         if (loadingOverlay.style.display === 'flex') loadingOverlay.style.display = 'none';
         hasCommitted = true;
-    }, 15000);
+    }, 4000);
 });
 
-webview.addEventListener('loadcommit', (e) => { if (e.isTopLevel) hasCommitted = true; });
-
-webview.addEventListener('loadstop', (e) => {
-    if (e.isTopLevel === false || !hasCommitted) return;
-    webview.executeScript({ code: "window.location.href" }, function (results) {
-        if (results && results[0] && results[0].includes('wp-login.php')) return;
-        clearTimeout(spinnerSafetyTimer);
-        setTimeout(() => {
-            loadingOverlay.style.display = 'none';
-            webview.executeScript({ code: "document.title" }, function (res) {
-                if (res && res[0] && res[0].trim() !== '') { windowTitle.innerText = res[0]; document.title = `${res[0]} - ${appName}`; }
-                else if (windowTitle.innerText === 'Carregando...') { windowTitle.innerText = 'Início'; document.title = appName; }
-            });
-            webview.focus();
-        }, 300);
-    });
+webview.addEventListener('did-fail-load', (e) => {
+    console.log('[APP.JS] webview did-fail-load:', e.errorCode, e.errorDescription, e.validatedURL);
+    clearTimeout(showSpinnerTimer);
+    loadingOverlay.style.display = 'none';
 });
 
+webview.addEventListener('dom-ready', () => {
+    clearTimeout(showSpinnerTimer);
+    loadingOverlay.style.display = 'none';
+});
+
+webview.addEventListener('did-finish-load', (e) => {
+    clearTimeout(showSpinnerTimer);
+    clearTimeout(spinnerSafetyTimer);
+    setTimeout(() => {
+        loadingOverlay.style.display = 'none';
+        webview.focus();
+        const currentUrl = typeof webview.getURL === 'function' ? webview.getURL() : webview.src;
+        console.log('[APP.JS] did-finish-load URL:', currentUrl);
+        if (currentUrl && currentUrl.includes('/wp-admin')) {
+            isLoggingIn = false;
+            webview.executeJavaScript('window.location.href = "/";');
+            return;
+        }
+        if (currentUrl && currentUrl.includes('wp-login.php')) {
+            const isLoggedIn = localStorage.getItem('sv_logged_in') === 'true' || sessionStorage.getItem('sv_logged_in') === 'true';
+            if (isLoggedIn && !isLoggingIn) {
+                console.log('[APP.JS] Sessão do WordPress expirou (redirecionado para wp-login.php). Forçando logout.');
+                forcarLogout('Sessão do site expirou. Por favor, faça login novamente.');
+            }
+            return;
+        }
+
+        if (currentUrl && currentUrl !== 'about:blank') {
+            isLoggingIn = false;
+            const isLoggedIn = localStorage.getItem('sv_logged_in') === 'true' || sessionStorage.getItem('sv_logged_in') === 'true';
+            if (isLoggedIn) {
+                const loginO = document.getElementById('login-overlay');
+                if (loginO && loginO.style.display !== 'none') {
+                    loginO.style.display = 'none';
+                    appWindow.resizeTo(1280, 720); appWindow.setPosition('center'); appWindow.maximize();
+                }
+            }
+        }
+    }, 100);
+});
+
+// Atualiza o título da barra e da taskbar do Windows em tempo real
 webview.addEventListener('page-title-updated', (e) => {
-    if (e.title && e.title.trim() !== '') { windowTitle.innerText = e.title; document.title = `${e.title} - ${appName}`; }
+    const title = e.title;
+    if (title && title !== 'about:blank') {
+        windowTitle.innerText = title;
+        document.title = `${title} - ${appName}`;
+    }
 });
 
 // ==========================================
@@ -104,11 +148,11 @@ if (loginPass) loginPass.addEventListener('keydown', pressionarEnter);
 function checarSessaoLocal() {
     if (localStorage.getItem('sv_logged_in') === 'true' || sessionStorage.getItem('sv_logged_in') === 'true') {
         clearInterval(lockWindowInterval); loginOverlay.style.display = 'none'; titleBar.style.display = 'flex';
-        setTimeout(() => { appWindow.maximize(); }, 150); webview.src = SITE_DOMAIN;
+        setTimeout(() => { appWindow.resizeTo(1280, 720); appWindow.setPosition('center'); appWindow.maximize(); }, 150); webview.src = SITE_DOMAIN;
         iniciarVerificacaoAssinatura();
         iniciarHeartbeat();
     } else {
-        titleBar.style.display = 'none'; loginOverlay.style.display = 'flex'; webview.src = 'about:blank';
+        titleBar.style.display = 'none'; loginOverlay.style.display = 'flex';
         appWindow.leaveFullscreen(); appWindow.unmaximize(); appWindow.resizeTo(450, 680); appWindow.setPosition('center');
         lockWindowInterval = setInterval(() => {
             if (window.innerWidth > 600 && localStorage.getItem('sv_logged_in') !== 'true' && sessionStorage.getItem('sv_logged_in') !== 'true') {
@@ -125,19 +169,18 @@ function forcarLogout(msgErro) {
     pararHeartbeat();
     // Navegar para o endpoint de logout server-side (limpa cookies httpOnly)
     webview.src = SITE_DOMAIN + '/?sv_auto_logout=1';
-    // Limpar cookies da partição trusted
-    chrome.cookies.getAll({ storeId: "persist:trusted", url: SITE_DOMAIN }, function (cookies) {
-        for (let i = 0; i < cookies.length; i++) { chrome.cookies.remove({ storeId: "persist:trusted", url: SITE_DOMAIN + cookies[i].path, name: cookies[i].name }); }
-    });
-    // Limpar cookies da partição google_oauth também
-    chrome.cookies.getAll({ storeId: "persist:google_oauth", url: SITE_DOMAIN }, function (cookies) {
-        for (let i = 0; i < cookies.length; i++) { chrome.cookies.remove({ storeId: "persist:google_oauth", url: SITE_DOMAIN + cookies[i].path, name: cookies[i].name }); }
-    });
+    
+    // Limpar cookies usando o processo principal
+    if (window.electronAPI && window.electronAPI.clearCookies) {
+        window.electronAPI.clearCookies();
+    }
+    
     // Após um breve delay, limpar webview e mostrar login
     setTimeout(() => {
-        webview.src = 'about:blank';
+        titleBar.style.display = 'none';
+        loginOverlay.style.display = 'flex';
+        appWindow.leaveFullscreen(); appWindow.unmaximize(); appWindow.resizeTo(450, 680); appWindow.setPosition('center');
     }, 1500);
-    titleBar.style.display = 'none';
     appWindow.leaveFullscreen(); appWindow.unmaximize(); appWindow.resizeTo(450, 680); appWindow.setPosition('center');
     lockWindowInterval = setInterval(() => {
         if (window.innerWidth > 600 && localStorage.getItem('sv_logged_in') !== 'true' && sessionStorage.getItem('sv_logged_in') !== 'true') {
@@ -150,23 +193,67 @@ function forcarLogout(msgErro) {
 
 let isGoogleLoggingIn = false;
 
-webview.addEventListener('loadcommit', (e) => {
-    if (e.isTopLevel && isLoggingIn) {
-        const user = loginUser.value.trim(); const pass = loginPass.value.trim(); const rememberMe = loginRemember ? loginRemember.checked : true;
-        const autoLoginScript = `
-            document.documentElement.style.opacity = '0'; document.documentElement.style.pointerEvents = 'none'; document.body.style.background = '#0a0b0d';
-            var form = document.createElement('form'); form.method = 'POST'; form.action = '${SITE_DOMAIN}/wp-login.php'; form.style.display = 'none';
-            var u = document.createElement('input'); u.type = 'hidden'; u.name = 'log'; u.value = '${user}'; form.appendChild(u);
-            var p = document.createElement('input'); p.type = 'hidden'; p.name = 'pwd'; p.value = '${pass}'; form.appendChild(p);
-            if (${rememberMe}) { var r = document.createElement('input'); r.type = 'hidden'; r.name = 'rememberme'; r.value = 'forever'; form.appendChild(r); }
-            var redir = document.createElement('input'); redir.type = 'hidden'; redir.name = 'redirect_to'; redir.value = '${SITE_DOMAIN}/'; form.appendChild(redir);
-            document.body.appendChild(form); form.submit();
-        `;
-        webview.executeScript({ code: autoLoginScript });
-        isLoggingIn = false;
+webview.addEventListener('did-finish-load', function loginLoadHandler() {
+    console.log('[APP.JS] iframe load event fired. isLoggingIn:', isLoggingIn, '_tempUser:', window._tempUser);
+    if (isLoggingIn && window._tempUser) {
+        try {
+            console.log('[APP.JS] Injetando auto-login no webview!');
+            const script = `
+                setTimeout(() => {
+                    const u = document.getElementById('user_login');
+                    const p = document.getElementById('user_pass');
+                    const r = document.getElementById('rememberme');
+                    const btn = document.getElementById('wp-submit');
+                    if (u && p && btn) {
+                        const wpError = document.getElementById('login_error');
+                        if (wpError) {
+                            console.log('[WEBVIEW] Erro de login do WordPress:', wpError.innerText);
+                        }
+
+                        u.value = '${window._tempUser}';
+                        p.value = '${window._tempPass}';
+                        if (r) r.checked = ${window._tempRememberMe};
+                        
+                        let turnstileAttempts = 0;
+                        const checkTurnstile = setInterval(() => {
+                            turnstileAttempts++;
+                            const tokenInput = document.querySelector('[name="cf-turnstile-response"]');
+                            const hasTurnstile = !!tokenInput;
+                            
+                            const forceSubmit = () => {
+                                console.log('[APP.JS] Removendo testcookie e executando btn.click()...');
+                                const testCookieInput = document.querySelector('input[name="testcookie"]');
+                                if (testCookieInput) testCookieInput.remove();
+                                btn.click();
+                            };
+                            
+                            if (!hasTurnstile && turnstileAttempts > 4) {
+                                console.log('[APP.JS] Sem Turnstile, forçando submit com btn.click()');
+                                clearInterval(checkTurnstile);
+                                forceSubmit();
+                                return;
+                            }
+                            
+                            if (hasTurnstile) {
+                                if ((tokenInput.value && tokenInput.value.length > 5) || turnstileAttempts > 15) {
+                                    console.log('[APP.JS] Turnstile resolvido (ou timeout), forçando submit...');
+                                    clearInterval(checkTurnstile);
+                                    forceSubmit();
+                                }
+                            }
+                        }, 500);
+                    }
+                }, 1000);
+            `;
+            webview.executeJavaScript(script);
+            window._tempUser = ''; window._tempPass = ''; window._tempRememberMe = false;
+            // A flag isLoggingIn será mantida true para evitar que o outro listener force o logout imediatamente
+            webview.removeEventListener('did-finish-load', loginLoadHandler);
+        } catch (e) {
+            console.log('Erro ao enviar postMessage para auto-login:', e);
+        }
     }
 });
-
 if (btnLogin) {
     btnLogin.addEventListener('click', () => {
         const user = loginUser.value.trim(); const pass = loginPass.value.trim(); const rememberMe = loginRemember ? loginRemember.checked : true;
@@ -177,13 +264,26 @@ if (btnLogin) {
             .then(async res => { clearTimeout(timeoutId); const data = await res.json(); if (!res.ok || data.code) throw new Error(data.message || "Usuário incorreto."); return data; })
             .then(data => {
                 if (data.success) {
-                    btnLogin.innerText = "Entrar no Launcher"; btnLogin.disabled = false;
+                    btnLogin.innerText = "Conectando e verificando..."; btnLogin.disabled = true;
                     if (rememberMe) localStorage.setItem('sv_logged_in', 'true'); else sessionStorage.setItem('sv_logged_in', 'true');
                     localStorage.setItem('sv_user_id', data.user_id);
                     localStorage.setItem('sv_username', user);
-                    loginError.style.display = 'none'; loginOverlay.style.display = 'none';
-                    clearInterval(lockWindowInterval); titleBar.style.display = 'flex'; appWindow.maximize();
-                    isLoggingIn = true; webview.src = SITE_DOMAIN + '/wp-login.php';
+                    loginError.style.display = 'none'; 
+                    clearInterval(lockWindowInterval); titleBar.style.display = 'flex';
+                    window._tempUser = user; window._tempPass = pass; window._tempRememberMe = rememberMe; isLoggingIn = true; webview.src = SITE_DOMAIN + '/wp-login.php';
+                    if (window.electronAPI && window.electronAPI.submitLogin) {
+                        window.electronAPI.submitLogin({ user: user, pass: pass, rememberMe: rememberMe });
+                    }
+                    
+                    // Fallback de segurança: se após 30 segundos a página não navegou para remover o overlay, removemos
+                    setTimeout(() => {
+                        const loginO = document.getElementById('login-overlay');
+                        if (loginO && loginO.style.display !== 'none') {
+                            console.log('[APP.JS] Fallback de segurança: removendo login-overlay após 30s');
+                            loginO.style.display = 'none';
+                            appWindow.resizeTo(1280, 720); appWindow.setPosition('center'); appWindow.maximize();
+                        }
+                    }, 30000);
                 } else { throw new Error("Usuário ou senha incorretos."); }
             })
             .catch(err => {
@@ -266,7 +366,7 @@ if (btnGoogleLogin) {
                     loginOverlay.style.display = 'none';
                     clearInterval(lockWindowInterval);
                     titleBar.style.display = 'flex';
-                    appWindow.maximize();
+                    appWindow.resizeTo(1280, 720); appWindow.setPosition('center'); appWindow.maximize();
                     // Navegar para URL de auto-login (WordPress seta os cookies via HTTP)
                     if (autoToken) {
                         webview.src = SITE_DOMAIN + '/?sv_auto_login=' + autoToken;
@@ -407,7 +507,7 @@ if (elSettings) elSettings.addEventListener('click', () => { let sm = document.g
 let elCloseSet = document.getElementById('close-settings');
 if (elCloseSet) elCloseSet.addEventListener('click', () => { let sm = document.getElementById('settings-modal'); if(sm) sm.style.display = 'none'; });
 
-if (elDiscord) elDiscord.addEventListener('change', (e) => { rpcEnabled = e.target.checked; localStorage.setItem('sv_discord', rpcEnabled); if (!rpcEnabled && typeof rpc !== 'undefined' && rpcReady) rpc.clearActivity(); if (rpcEnabled && rpcReady) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir'); });
+if (elDiscord) elDiscord.addEventListener('change', (e) => { rpcEnabled = e.target.checked; localStorage.setItem('sv_discord', rpcEnabled); if (!rpcEnabled && rpcReady) { try { window.electronAPI.clearDiscordRPC(); } catch(err) {} } if (rpcEnabled && rpcReady) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir'); });
 if (elAutoNext) elAutoNext.addEventListener('change', (e) => { autoNextEnabled = e.target.checked; localStorage.setItem('sv_autonext', autoNextEnabled); });
 if (elAutoSkip) elAutoSkip.addEventListener('change', (e) => { autoSkipEnabled = e.target.checked; localStorage.setItem('sv_autoskip', autoSkipEnabled); });
 if (toggleFreioBtn) toggleFreioBtn.addEventListener('change', (e) => { freioEnabled = e.target.checked; localStorage.setItem('sv_freio', freioEnabled); });
@@ -422,19 +522,14 @@ let currentVersion = '0.0.0';
 let isDownloading = false;
 let latestInstallerUrl = null;
 let latestVersionAvailable = null;
-if (nw && nw.App && nw.App.manifest && nw.App.manifest.version) { 
-    currentVersion = nw.App.manifest.version; 
-    log('Versão lida de nw.App.manifest: ' + currentVersion);
-} else {
-    // Fallback: ler direto do package.json
-    try {
-        const pkg = require('./package.json');
-        currentVersion = pkg.version || '0.0.0';
-        log('Versão lida de package.json (fallback): ' + currentVersion);
-    } catch(e) {
-        log('ERRO ao ler versão: ' + e.message);
-    }
+
+// Lê a versão de forma super segura via IPC direto do core do Electron
+try {
+    currentVersion = window.electronAPI.getAppVersionSync() || '0.0.0';
+} catch (e) {
+    currentVersion = '1.0.0'; // Fallback
 }
+
 let elAppVer = document.getElementById('app-version');
 if (elAppVer) elAppVer.innerText = `v${currentVersion}`; 
 let elSetVer = document.getElementById('settings-version-text');
@@ -651,7 +746,7 @@ async function downloadAndInstallUpdate() {
         installerProcess.unref();
 
         setTimeout(() => {
-            nw.App.quit();
+            appWindow.close();
         }, 2000);
 
     } catch (e) {
@@ -670,18 +765,25 @@ document.getElementById('btn-update').addEventListener('click', () => downloadAn
 setTimeout(() => checkForUpdates(false), 3000); setInterval(() => checkForUpdates(false), 300000);
 
 // ==========================================
-// --- 6. MOTOR DO DISCORD RPC ---
+// --- 6. MOTOR DO DISCORD RPC (via IPC com main.cjs) ---
 // ==========================================
-let rpcReady = false; let rpc = null;
+let rpcReady = false;
+// O RPC real roda no main.cjs. Aqui só mandamos atualizações via IPC.
 try {
-    const DiscordRPC = require('discord-rpc'); const clientId = '1474268923045347429'; DiscordRPC.register(clientId); rpc = new DiscordRPC.Client({ transport: 'ipc' });
-    rpc.on('ready', () => { rpcReady = true; const tituloAntigo = windowTitle.innerText; windowTitle.innerText = '✅ Discord Conectado!'; windowTitle.style.color = '#81bc00'; setTimeout(() => { windowTitle.innerText = tituloAntigo; windowTitle.style.color = 'rgba(255, 255, 255, 0.9)'; }, 3000); if (rpcEnabled) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir'); });
-    rpc.login({ clientId }).catch(err => console.log("Discord App não detectado."));
-} catch (e) { console.error("Falha ao carregar RPC"); }
+    window.electronAPI.onDiscordRPCReady(() => {
+        rpcReady = true;
+        const tituloAntigo = windowTitle.innerText;
+        windowTitle.innerText = '✅ Discord Conectado!'; windowTitle.style.color = '#81bc00';
+        setTimeout(() => { windowTitle.innerText = tituloAntigo; windowTitle.style.color = 'rgba(255, 255, 255, 0.9)'; }, 3000);
+        if (rpcEnabled) setDiscordStatus('Navegando no catálogo...', 'Escolhendo o que assistir');
+    });
+    window.electronAPI.initDiscordRPC();
+} catch(e) { console.error('Falha ao iniciar IPC Discord:', e.message); }
 function setDiscordStatus(detalhes, estado, startTime = null, imagemUrl = 'logo') {
-    if (!rpcReady || !rpc || !rpcEnabled) return;
-    let activityInfo = { details: detalhes, state: estado, largeImageKey: imagemUrl, largeImageText: 'Stream Verde Premium', instance: false };
-    if (startTime) activityInfo.startTimestamp = startTime; rpc.setActivity(activityInfo).catch(console.error);
+    if (!rpcEnabled) return;
+    try {
+        window.electronAPI.updateDiscordRPC({ details: detalhes, state: estado, startTimestamp: startTime, largeImageKey: imagemUrl, largeImageText: 'Stream Verde Premium' });
+    } catch(e) {}
 }
 
 // ==========================================
@@ -690,25 +792,43 @@ function setDiscordStatus(detalhes, estado, startTime = null, imagemUrl = 'logo'
 let currentVerdeSegsGlob = 'null';
 
 setInterval(() => {
-    if (webview && webview.executeScript) {
-        let syncCode = `window.verdeAutoSkip = ${autoSkipEnabled};`;
-        if (currentVerdeSegsGlob !== 'null') syncCode += ` window.verdeSegs = ${currentVerdeSegsGlob};`;
-        webview.executeScript({ code: syncCode, allFrames: true });
-    }
+    let syncCode = `window.verdeAutoSkip = ${autoSkipEnabled};`;
+    if (currentVerdeSegsGlob !== 'null') syncCode += ` window.verdeSegs = ${currentVerdeSegsGlob};`;
+    try { window.electronAPI.injectAllFrames(syncCode); } catch(e) {}
 }, 2000);
 
-webview.addEventListener('loadcommit', () => {
+webview.addEventListener('dom-ready', () => {
+    webview.insertCSS('#fwl-widget-box { display: none !important; }').catch(console.error);
+
     const indestructibleCode = `
         window.verdeSegs = ${currentVerdeSegsGlob};
         window.verdeAutoSkip = ${autoSkipEnabled};
 
         if (!window.verdeMaster) {
             window.verdeMaster = true;
+            // SISTEMA DE BORBULHAMENTO DE EVENTOS VERDE
+            // No Electron, console-message só captura logs do top-frame.
+            // Iframes precisam borbulhar via postMessage.
+            window.verde_emit = function(msg) {
+                if (window.self === window.top) {
+                    console.log(msg);
+                } else {
+                    try { window.top.postMessage({ type: 'VERDE_BUBBLE', msg: msg }, '*'); } catch(e) {
+                        try { window.parent.postMessage({ type: 'VERDE_BUBBLE', msg: msg }, '*'); } catch(e2) {}
+                    }
+                }
+            };
 
             // =======================================
             // LÓGICA DA PÁGINA PRINCIPAL (WP)
             // =======================================
             if (window.self === window.top) {
+                // Receptor de eventos borbulhados dos iframes
+                window.addEventListener('message', (evt) => {
+                    if (evt.data && evt.data.type === 'VERDE_BUBBLE' && typeof evt.data.msg === 'string') {
+                        console.log(evt.data.msg);
+                    }
+                });
                 let verdeLastAtv = Date.now();
                 const verdeVerificaAtv = (e) => {
                     if (!e.isTrusted) return; 
@@ -812,8 +932,8 @@ webview.addEventListener('loadcommit', () => {
             }
 
             const notificarTela = () => {
-                if (document.fullscreenElement || document.webkitFullscreenElement) console.log('VERDE_FS_ON');
-                else console.log('VERDE_FS_OFF');
+                if (document.fullscreenElement || document.webkitFullscreenElement) verde_emit('VERDE_FS_ON');
+                else verde_emit('VERDE_FS_OFF');
             };
             document.addEventListener('fullscreenchange', notificarTela);
             document.addEventListener('webkitfullscreenchange', notificarTela);
@@ -836,16 +956,16 @@ webview.addEventListener('loadcommit', () => {
                         video.addEventListener('ended', () => { 
                             if (!video.avisoEnviado && video.duration !== Infinity && video.duration > 300) {
                                 if (document.fullscreenElement || document.webkitFullscreenElement) {
-                                    console.log('VERDE_WAS_IN_FS_TRUE');
+                                    verde_emit('VERDE_WAS_IN_FS_TRUE');
                                     if (document.exitFullscreen) document.exitFullscreen();
                                     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                                } else { console.log('VERDE_WAS_IN_FS_FALSE'); }
-                                console.log('VERDE_VIDEO_ENDED'); 
+                                } else { verde_emit('VERDE_WAS_IN_FS_FALSE'); }
+                                verde_emit('VERDE_VIDEO_ENDED'); 
                             }
                         });
-                        video.addEventListener('play', () => { console.log('VERDE_STATUS_PLAY:' + video.currentTime); });
-                        video.addEventListener('pause', () => { console.log('VERDE_STATUS_PAUSE:' + video.currentTime); });
-                        if (!video.paused) console.log('VERDE_STATUS_PLAY:' + video.currentTime);
+                        video.addEventListener('play', () => { verde_emit('VERDE_STATUS_PLAY:' + video.currentTime); });
+                        video.addEventListener('pause', () => { verde_emit('VERDE_STATUS_PAUSE:' + video.currentTime); });
+                        if (!video.paused) verde_emit('VERDE_STATUS_PLAY:' + video.currentTime);
                     }
 
                     let tempoAtual = video.currentTime;
@@ -899,7 +1019,7 @@ webview.addEventListener('loadcommit', () => {
                                         const v = document.querySelector('video');
                                         if (v) v.currentTime = parseFloat(b.dataset.skipTarget);
                                         b.remove();
-                                        console.log('VERDE_AUTO_SKIPPED');
+                                        verde_emit('VERDE_AUTO_SKIPPED');
                                     }
                                 }, 1500);
                             } else {
@@ -931,11 +1051,11 @@ webview.addEventListener('loadcommit', () => {
                         if (horaDoProximo && !video.avisoEnviado) {
                             video.avisoEnviado = true;
                             if (document.fullscreenElement || document.webkitFullscreenElement) {
-                                console.log('VERDE_WAS_IN_FS_TRUE');
+                                verde_emit('VERDE_WAS_IN_FS_TRUE');
                                 if (document.exitFullscreen) document.exitFullscreen();
                                 else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                            } else { console.log('VERDE_WAS_IN_FS_FALSE'); }
-                            console.log('VERDE_SHOW_NEXT_EP');
+                            } else { verde_emit('VERDE_WAS_IN_FS_FALSE'); }
+                            verde_emit('VERDE_SHOW_NEXT_EP');
                         }
                     }
                 }
@@ -963,7 +1083,12 @@ webview.addEventListener('loadcommit', () => {
                     }
 
                     // 2. Autoplay (Só clica se estiver pausado e no começo)
-                    if (!video || (video.paused && video.currentTime <= 1)) {
+                    // IMPORTANTE: Não clicar antes do Turnstile do Cloudflare ser resolvido!
+                    const turnstileFrame = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                    const turnstileInput = document.querySelector('[name="cf-turnstile-response"]');
+                    const turnstileResolvido = !turnstileFrame || (turnstileInput && turnstileInput.value && turnstileInput.value.length > 5);
+
+                    if (turnstileResolvido && (!video || (video.paused && video.currentTime <= 1))) {
                         const bigPlayBtns = document.querySelectorAll('.vjs-big-play-button, .plyr__control--overlaid, [aria-label="Play"], .art-icon-play');
                         for (let btn of bigPlayBtns) {
                             if (btn && btn.offsetParent !== null && !btn.getAttribute('data-clicked')) {
@@ -993,9 +1118,9 @@ webview.addEventListener('loadcommit', () => {
                         if (document.body.innerText.includes('Por favor não abra o console do navegador') || document.body.innerText.includes('DevTools')) {
                             if (!window._verdeProtecaoReloading) {
                                 window._verdeProtecaoReloading = true;
-                                console.log('VERDE_ANTI_DEVTOOLS_DETECTADO - Recarregando Janela Pai via WebView Console');
+                                verde_emit('VERDE_ANTI_DEVTOOLS_DETECTADO - Recarregando Janela Pai via WebView Console');
                                 if (window.top !== window.self) {
-                                    try { console.log('VERDE_FULL_RELOAD_REQUESTED_FROM_DEVTOOLS'); } catch(e){}
+                                    try { verde_emit('VERDE_FULL_RELOAD_REQUESTED_FROM_DEVTOOLS'); } catch(e){}
                                 }
                             }
                         }
@@ -1019,7 +1144,11 @@ webview.addEventListener('loadcommit', () => {
             }
         }
     `;
-    webview.executeScript({ code: indestructibleCode, allFrames: true });
+    // Enviar para main.cjs para injetar em todos os frames (incluindo iframes de players)
+    try {
+        window.electronAPI.setInjectionCode(indestructibleCode);
+        window.electronAPI.injectAllFrames(indestructibleCode);
+    } catch(e) { console.error('Erro ao injetar código:', e); }
 });
 
 // ==========================================
@@ -1030,19 +1159,15 @@ document.getElementById('content-area').addEventListener('click', () => webview.
 
 
 
-webview.addEventListener('dialog', (e) => {
-    e.preventDefault();
-    if (e.messageText && (e.messageText.includes('Erro ao carregar') || e.messageText.includes('Error loading'))) { e.dialog.ok(); return; }
-    if (e.messageType === 'alert') alert(e.messageText), e.dialog.ok();
-    else if (e.messageType === 'confirm') confirm(e.messageText) ? e.dialog.ok() : e.dialog.cancel();
-    else if (e.messageType === 'prompt') { const res = prompt(e.messageText, e.defaultPromptText); res !== null ? e.dialog.ok(res) : e.dialog.cancel(); }
-});
-
-webview.addEventListener('permissionrequest', function (e) { if (e.permission === 'fullscreen') e.request.allow(); });
+// (Handlers de dialog/permission do NW.js removidos - não aplicáveis ao Electron)
 
 let lastTokenReload = 0;
 
-webview.addEventListener('consolemessage', (e) => {
+webview.addEventListener('console-message', (e) => {
+    // Só logar mensagens relevantes (VERDE, erros, ASF), ignorar spam de objetos
+    if (typeof e.message === 'string' && (e.message.startsWith('VERDE') || e.message.includes('[ASF]') || e.message.includes('Antigravity') || e.level >= 2)) {
+        console.log('[WEBVIEW]', e.message);
+    }
 
     if (e.message === 'VERDE_FS_ON') { titleBar.style.display = 'none'; }
     else if (e.message === 'VERDE_FS_OFF') { titleBar.style.display = 'flex'; }
@@ -1113,10 +1238,10 @@ webview.addEventListener('consolemessage', (e) => {
                 }).filter(s => !isNaN(s.start) && !isNaN(s.end) && s.end > s.start);
 
                 currentVerdeSegsGlob = JSON.stringify(temposLimpos);
-                webview.executeScript({ code: `window.verdeSegs = ${currentVerdeSegsGlob};`, allFrames: true });
+                try { window.electronAPI.injectAllFrames(`window.verdeSegs = ${currentVerdeSegsGlob};`); } catch(e) {}
             } else {
                 currentVerdeSegsGlob = 'null';
-                webview.executeScript({ code: `window.verdeSegs = null;`, allFrames: true });
+                try { window.electronAPI.injectAllFrames(`window.verdeSegs = null;`); } catch(e) {}
             }
         };
 
@@ -1136,7 +1261,6 @@ webview.addEventListener('consolemessage', (e) => {
     }
 
     else if (typeof e.message === 'string' && e.message.startsWith('VERDE_STATUS_PAUSE')) {
-        document.title = `Pausado - ${appName}`;
         let videoTime = e.message.includes(':') ? parseFloat(e.message.split(':')[1]) || 0 : 0;
         let h = Math.floor(videoTime / 3600); let m = Math.floor((videoTime % 3600) / 60); let s = Math.floor(videoTime % 60);
         let tempoFormatado = h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}` : `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
@@ -1145,7 +1269,6 @@ webview.addEventListener('consolemessage', (e) => {
     }
 
     else if (typeof e.message === 'string' && e.message.startsWith('VERDE_STATUS_PLAY')) {
-        document.title = `Reproduzindo - ${appName}`;
         let videoTime = e.message.includes(':') ? parseFloat(e.message.split(':')[1]) || 0 : 0;
         let tempoSincronizado = Date.now() - (videoTime * 1000);
         let nomeVideo = windowTitle.innerText.replace(' - Stream Verde', '').trim();
@@ -1154,11 +1277,8 @@ webview.addEventListener('consolemessage', (e) => {
         if (shouldAutoFullscreen) {
             shouldAutoFullscreen = false;
             setTimeout(() => {
-                webview.executeScript({
-                    code: `(function() { 
-                        // TRAVA ANTI-CLIQUE FANTASMA (Só clica se NÃO estiver em Fullscreen)
+                try { window.electronAPI.injectAllFrames(`(function() { 
                         if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement) return;
-
                         const video = document.querySelector('video'); 
                         const fsBtn = document.querySelector('.vjs-fullscreen-control, .plyr__control[data-plyr="fullscreen"], .jw-icon-fullscreen, [aria-label="Fullscreen"]'); 
                         if (fsBtn) fsBtn.click(); 
@@ -1166,9 +1286,7 @@ webview.addEventListener('consolemessage', (e) => {
                             if (video.requestFullscreen) video.requestFullscreen(); 
                             else if (video.webkitRequestFullscreen) video.webkitRequestFullscreen(); 
                         } 
-                    })();`,
-                    allFrames: true
-                });
+                    })();`); } catch(e) {}
             }, 1500);
         }
     }
@@ -1176,7 +1294,7 @@ webview.addEventListener('consolemessage', (e) => {
     else if (e.message === 'VERDE_USER_ACTIVE') { episociosSeguidos = 0; }
     else if (e.message === 'VERDE_AUTO_NEXT_TRIGGERED') { episociosSeguidos++; }
     else if (e.message === 'VERDE_CONTINUE_WATCHING') { episociosSeguidos = 0; }
-    else if (e.message === 'VERDE_PAUSE_ALL') { webview.executeScript({ code: "const v = document.querySelector('video'); if(v) v.pause();", allFrames: true }); }
+    else if (e.message === 'VERDE_PAUSE_ALL') { try { window.electronAPI.injectAllFrames("const v = document.querySelector('video'); if(v) v.pause();"); } catch(e2) {} }
 
     else if (e.message === 'VERDE_RELOAD_TOKEN_EXPIRED') {
         let agora = Date.now();
@@ -1192,23 +1310,43 @@ webview.addEventListener('consolemessage', (e) => {
         titleBar.style.display = 'flex'; // Zerei os comandos do appWindow aqui
         const isFreioAtivo = freioEnabled && (episociosSeguidos >= freioLimit);
 
-        webview.executeScript({
-            code: `
+        webview.executeJavaScript(`
                 (function() {
                     const navLinks = Array.from(document.querySelectorAll('a.asf-nav-btn'));
-                    const nextLink = navLinks.find(el => { const txt = el.innerText.toLowerCase(); return txt.includes('próximo') || txt.includes('next'); });
+                    const nextLink = navLinks.find(el => { const txt = el.innerText.toLowerCase(); return txt.includes('pr\u00f3ximo') || txt.includes('next'); });
 
                     if (nextLink && !nextLink.classList.contains('disabled') && !document.getElementById('verde-overlay')) {
                         if (!document.getElementById('verde-anim')) {
                             const style = document.createElement('style'); style.id = 'verde-anim';
-                            style.innerHTML = "@keyframes slideUp { from { transform: translateY(120%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }";
+                            style.innerHTML = "@keyframes slideUp { from { transform: translateY(120%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } @keyframes fillProgress { from { width: 0%; } to { width: 100%; } }";
                             document.head.appendChild(style);
                         }
 
                         const overlay = document.createElement('div'); overlay.id = 'verde-overlay';
-                        overlay.style.cssText = "position:fixed; bottom:25px; right:25px; width:330px; background:rgba(20, 20, 20, 0.95); border:1px solid rgba(129, 188, 0, 0.4); z-index:999999; display:flex; flex-direction:column; padding:20px; color:white; font-family:'Segoe UI', sans-serif; border-radius:12px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); backdrop-filter: blur(8px); animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);";
+                        overlay.style.cssText = "position:fixed; bottom:25px; right:25px; width:330px; background:rgba(20, 20, 20, 0.95); border:1px solid rgba(129, 188, 0, 0.4); z-index:999999; display:flex; flex-direction:column; padding:20px; color:white; font-family:'Segoe UI', sans-serif; border-radius:12px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); backdrop-filter: blur(8px); animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden;";
                         
                         const isFreio = ${isFreioAtivo};
+
+                        let nextTitle = "";
+                        let nextImg = "";
+                        const activeEp = document.querySelector('.jws-pisodes_advanced-item.active');
+                        if (activeEp) {
+                            let nextEp = activeEp.nextElementSibling;
+                            while(nextEp && !nextEp.classList.contains('jws-pisodes_advanced-item')) {
+                                nextEp = nextEp.nextElementSibling;
+                            }
+                            if (nextEp) {
+                                const imgEl = nextEp.querySelector('.post-media img');
+                                if (imgEl) {
+                                    nextImg = imgEl.src;
+                                    nextTitle = imgEl.alt || "";
+                                }
+                                if (!nextTitle) {
+                                    const titleEl = nextEp.querySelector('.episodes-info h6');
+                                    if (titleEl) nextTitle = titleEl.innerText;
+                                }
+                            }
+                        }
 
                         const forcarProximo = () => {
                             console.log('VERDE_AUTO_NEXT_TRIGGERED');
@@ -1217,24 +1355,27 @@ webview.addEventListener('consolemessage', (e) => {
                         };
 
                         if (isFreio) {
-                            overlay.innerHTML = \`
-                                <div style='display:flex; justify-content:center; align-items:center; margin-bottom:15px;'><h2 style='font-size:18px; margin:0; font-weight:700; color:#81bc00;'>Stream Verde</h2></div>
-                                <h3 style='font-size:16px; color:#fff; margin:0 0 20px 0; font-weight:500; text-align:center;'>Você ainda está assistindo?</h3>
-                                <button id='v-now' style='width:100%; padding:14px; background:#81bc00; border:none; color:#121212; cursor:pointer; border-radius:6px; font-weight:bold; font-size:14px; text-transform:uppercase; transition:background 0.2s;' onmouseover='this.style.background="#9ce200"' onmouseout='this.style.background="#81bc00"'>Sim, continuar assistindo</button>
-                            \`;
+                            overlay.innerHTML = '<div style="display:flex; justify-content:center; align-items:center; margin-bottom:15px;"><h2 style="font-size:18px; margin:0; font-weight:700; color:#81bc00;">Stream Verde</h2></div><h3 style="font-size:16px; color:#fff; margin:0 0 20px 0; font-weight:500; text-align:center;">Voc\u00ea ainda est\u00e1 assistindo?</h3><button id="v-now" style="width:100%; padding:14px; background:#81bc00; border:none; color:#121212; cursor:pointer; border-radius:6px; font-weight:bold; font-size:14px; text-transform:uppercase;">Sim, continuar assistindo</button>';
                             document.body.appendChild(overlay);
                             console.log('VERDE_PAUSE_ALL'); 
                             document.getElementById('v-now').onclick = () => { console.log('VERDE_CONTINUE_WATCHING'); forcarProximo(); };
                         } else {
                             let count = 10;
-                            overlay.innerHTML = \`
-                                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;'>
-                                    <h2 style='font-size:15px; margin:0; font-weight:600; color:#ccc; letter-spacing:0.5px;'>Próximo Episódio em <span id='v-count' style='color:#81bc00; font-weight:900; font-size:18px;'>\${count}</span>s</h2>
-                                    <button id='v-cancel' style='background:transparent; border:none; color:#666; cursor:pointer; font-size:16px; font-weight:bold; padding:0; transition:color 0.2s;' onmouseover='this.style.color="#fff"' onmouseout='this.style.color="#666"'>✕</button>
-                                </div>
-                                <h3 style='font-size:14px; color:#fff; margin:0 0 20px 0; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' title='\${nextLink.innerText.replace('Próximo', '').trim()}'>\${nextLink.innerText.replace('Próximo', '').trim()}</h3>
-                                <button id='v-now' style='width:100%; padding:12px; background:#81bc00; border:none; color:#121212; cursor:pointer; border-radius:6px; font-weight:bold; font-size:14px; text-transform:uppercase; transition:background 0.2s;' onmouseover='this.style.background="#9ce200"' onmouseout='this.style.background="#81bc00"'>Assistir Agora</button>
-                            \`;
+                            let htmlContent = '<div style="position:absolute; top:0; left:0; height:100%; background:rgba(129, 188, 0, 0.15); z-index:-1; pointer-events:none; animation: fillProgress 10s linear forwards;"></div>';
+                            htmlContent += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;"><h2 style="font-size:15px; margin:0; font-weight:600; color:#ccc; letter-spacing:0.5px;">Pr\u00f3ximo Epis\u00f3dio em <span id="v-count" style="color:#81bc00; font-weight:900; font-size:18px;">' + count + '</span>s</h2><button id="v-cancel" style="background:transparent; border:none; color:#666; cursor:pointer; font-size:16px; font-weight:bold; padding:0; z-index:1;">\u2715</button></div>';
+                            
+                            if (nextTitle) {
+                                htmlContent += '<div style="display:flex; align-items:center; gap:12px; margin-bottom:15px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">';
+                                if (nextImg) {
+                                    htmlContent += '<img src="' + nextImg + '" style="width:70px; height:auto; border-radius:4px; object-fit:cover; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">';
+                                }
+                                htmlContent += '<h3 style="font-size:13px; color:#fff; margin:0; font-weight:500; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; line-height:1.4;">' + nextTitle + '</h3>';
+                                htmlContent += '</div>';
+                            }
+                            
+                            htmlContent += '<button id="v-now" style="width:100%; padding:12px; background:#81bc00; border:none; color:#121212; cursor:pointer; border-radius:6px; font-weight:bold; font-size:14px; text-transform:uppercase;">Assistir Agora</button>';
+                            
+                            overlay.innerHTML = htmlContent;
                             document.body.appendChild(overlay);
 
                             const timer = setInterval(() => {
@@ -1246,55 +1387,66 @@ webview.addEventListener('consolemessage', (e) => {
                         }
                     }
                 })();
-            `
-        });
+            `).catch(() => {});
     }
 });
 
+// Capturar teclas mesmo quando o foco está dentro do webview/player iframe
+webview.addEventListener('before-input-event', (e) => {
+    const ev = e.input;
+    if (ev.type !== 'keyDown') return;
+
+    if (ev.key === 'Escape') {
+        titleBar.style.display = 'flex';
+        webview.executeJavaScript(`
+            (function() {
+                if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                document.querySelectorAll('iframe').forEach(f => {
+                    try { f.contentWindow.postMessage({ type: 'VERDE_KEY', code: 'Escape' }, '*'); } catch(e){}
+                });
+            })();
+        `).catch(() => {});
+        return;
+    }
+
+    const chaves = [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    if (chaves.includes(ev.key)) {
+        e.preventDefault();
+        const code = ev.key === ' ' ? 'Space' : ev.key;
+        webview.executeJavaScript(`
+            (function() {
+                // Primeiro tenta controlar vídeo na página principal
+                const v = document.querySelector('video');
+                if (v) {
+                    if ('${code}' === 'Space') v.paused ? v.play() : v.pause();
+                    if ('${code}' === 'ArrowRight') v.currentTime += 10;
+                    if ('${code}' === 'ArrowLeft') v.currentTime -= 10;
+                    if ('${code}' === 'ArrowUp') v.volume = Math.min(v.volume + 0.1, 1);
+                    if ('${code}' === 'ArrowDown') v.volume = Math.max(v.volume - 0.1, 0);
+                }
+                // Também envia via postMessage para iframes (onde o player pode estar)
+                document.querySelectorAll('iframe').forEach(f => {
+                    try { f.contentWindow.postMessage({ type: 'VERDE_KEY', code: '${code}' }, '*'); } catch(e){}
+                });
+            })();
+        `).catch(() => {});
+    }
+});
+
+// Fallback: keydown no renderer (para quando o foco NÃO está no webview)
 window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         titleBar.style.display = 'flex';
-        webview.executeScript({ code: "if(document.exitFullscreen) document.exitFullscreen(); else if(document.webkitExitFullscreen) document.webkitExitFullscreen();" });
+        try { window.electronAPI.injectAllFrames("if(document.exitFullscreen) document.exitFullscreen(); else if(document.webkitExitFullscreen) document.webkitExitFullscreen();"); } catch(e2) {}
         return;
     }
     const tag = document.activeElement ? document.activeElement.tagName : '';
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'WEBVIEW') return;
 
     const chaves = [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
     if (chaves.includes(e.key)) {
         e.preventDefault();
-        webview.executeScript({
-            code: `(function(){ const v = document.querySelector('video'); if (v) { if ('${e.key}' === ' ') v.paused ? v.play() : v.pause(); if ('${e.key}' === 'ArrowRight') v.currentTime += 10; if ('${e.key}' === 'ArrowLeft') v.currentTime -= 10; if ('${e.key}' === 'ArrowUp') v.volume = Math.min(v.volume + 0.1, 1); if ('${e.key}' === 'ArrowDown') v.volume = Math.max(v.volume - 0.1, 0); } })();`,
-            allFrames: true
-        });
+        try { window.electronAPI.injectAllFrames(`(function(){ const v = document.querySelector('video'); if (v) { if ('${e.key}' === ' ') v.paused ? v.play() : v.pause(); if ('${e.key}' === 'ArrowRight') v.currentTime += 10; if ('${e.key}' === 'ArrowLeft') v.currentTime -= 10; if ('${e.key}' === 'ArrowUp') v.volume = Math.min(v.volume + 0.1, 1); if ('${e.key}' === 'ArrowDown') v.volume = Math.max(v.volume - 0.1, 0); } })();`); } catch(e2) {}
     }
 });
-
-webview.addEventListener('newwindow', (e) => {
-    e.preventDefault();
-});
-
-const mockVastXML = `<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"><Ad><InLine><AdSystem>Mock</AdSystem><AdTitle>Empty</AdTitle><Creatives><Creative sequence="1"><Linear><Duration>00:00:01</Duration><MediaFiles></MediaFiles></Linear></Creative></Creatives></InLine></Ad></VAST>`;
-const mockVastDataURI = "data:text/xml;charset=utf-8;base64," + Buffer.from(mockVastXML).toString('base64');
-const adPatterns = ["*://*.vast*", "*://*/*vast.xml*", "*://*/*ad-delivery*", "*://*/*vpaid*", "*://*/*ads.js*", "*://*/*ad_systems*", "*://*/*popunder*", "*://*/*popup*", "*://*/*pop.js*", "*://*/*pop.html*", "*://*.popcash.net/*", "*://*.propellerads.com/*", "*://*.onclickmega.com/*", "*://*.popads.net/*", "*://*.adsterra.com/*", "*://*.exoclick.com/*", "*://*.adcash.com/*", "*://*.hilltopads.com/*", "*://*.syndication.exdynsrv.com/*", "*://*.directrev.com/*", "*://*.terraclicks.com/*", "*://*.onclickads.net/*", "*://*.betano.com/*", "*://*.1xbet.com/*", "*://*/*bet*.js*", "*://*.blaze.com/*", "*://*.bet365.com/*", "*://*.sportingbet.com/*", "*://*.pixbet.com/*", "*://*/*tigrinho*", "*://*/*fortune-tiger*", "*://*.doubleclick.net/*", "*://*/*scorecardresearch*", "*://*/*adx.js*", "*://*/*anti-adblock*", "*://*/*blocker.js*", "*://*/*coin-hive*"];
-
-webview.request.onBeforeRequest.addListener(
-    function (details) {
-        const url = details.url.toLowerCase();
-        const isAd = adPatterns.some(p => { const keyword = p.replace(/\*:\/\/\*\.?/, '').replace(/\*/g, ''); return url.includes(keyword) && keyword.length > 3; });
-        if (isAd) {
-            if (details.type === 'sub_frame' && (url.includes('superflix') || url.includes('playerflix') || url.includes('primevicio'))) { return { cancel: false }; }
-            return { cancel: true };
-        }
-    }, { urls: ["<all_urls>"] }, ["blocking"]
-);
-
-webview.request.onBeforeSendHeaders.addListener(
-    function (details) {
-        let headers = details.requestHeaders;
-        const spoofedHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 SteamVerdeLauncher', 'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"', 'Sec-Ch-Ua-Mobile': '?0', 'Sec-Ch-Ua-Platform': '"Windows"' };
-        headers = headers.filter(h => { const name = h.name.toLowerCase(); return !['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'user-agent'].includes(name); });
-        for (const [key, value] of Object.entries(spoofedHeaders)) headers.push({ name: key, value: value });
-        return { requestHeaders: headers };
-    }, { urls: ["<all_urls>"] }, ["blocking", "requestHeaders", "extraHeaders"]
-);
